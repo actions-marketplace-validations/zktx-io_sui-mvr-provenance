@@ -114,16 +114,14 @@ const main = async () => {
       }),
     );
 
+    const url = `https://${config.network === 'mainnet' ? '' : `${config.network}/`}suivision.xyz/txblock/${txDigest}`;
+
     if (isGitSigner) {
-      const message = new TextEncoder().encode(
-        JSON.stringify({ url: `https://suiscan.xyz/${config.network}/tx/${txDigest}` }),
-      );
+      const message = new TextEncoder().encode(JSON.stringify({ url }));
       await (signer as GitSigner).signPersonalMessage(message, true);
     }
 
-    core.info(
-      `✅ Transaction executed successfully: https://suiscan.xyz/${config.network}/tx/${txDigest}`,
-    );
+    core.info(`✅ Transaction executed successfully: ${url}`);
     core.info(`⚠️ To perform upgrades later, add this to your mvr.config.json:`);
     core.info(`  "upgrade_cap": "${upgrade_cap}"`);
   }
