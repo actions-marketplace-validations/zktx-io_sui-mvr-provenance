@@ -10,6 +10,7 @@ import {
   loadGitVersion,
   loadMvrConfig,
   loadProvenance,
+  loadParamsJson,
   loadUpgradeCap,
 } from './utils/load';
 import { setCoreMetadata, setPkgMetadata, unsetAllMetadata } from './utils/mvrMetadatas';
@@ -18,6 +19,7 @@ import { mvrResolver } from './utils/mvrResolver';
 const main = async () => {
   const config = await loadMvrConfig();
   const provenance = await loadProvenance();
+  const params = await loadParamsJson();
   const deploy = await loadDeploy();
 
   const { signer, isGitSigner } = await getSigner(config);
@@ -120,6 +122,10 @@ const main = async () => {
       arguments: [packageInfo, transaction.pure.u64(version), git],
     });
 
+    transaction.add(
+      setPkgMetadata(cache['@mvr/metadata'], registry, appCap, deploy.digest, provenance, params),
+    );
+
     transaction.moveCall({
       target: `${cache['@mvr/core']}::move_registry::assign_package`,
       arguments: [registry, appCap, packageInfo],
@@ -219,7 +225,7 @@ const main = async () => {
     });
 
     transaction.add(
-      setPkgMetadata(cache['@mvr/metadata'], registry, appCap, deploy.digest, provenance),
+      setPkgMetadata(cache['@mvr/metadata'], registry, appCap, deploy.digest, provenance, params),
     );
 
     const { input } = await client.dryRunTransactionBlock({
