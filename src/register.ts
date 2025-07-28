@@ -199,6 +199,7 @@ const main = async () => {
           pkg: cache['@mvr/metadata'],
         },
         registry,
+        packageInfo,
         appCap,
       ),
     );
