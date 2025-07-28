@@ -62134,7 +62134,7 @@ const main = async () => {
         transaction.add(await (0, mvrMetadatas_1.unsetAllMetadata)(config.network, config.app_name, {
             core: cache['@mvr/core'],
             pkg: cache['@mvr/metadata'],
-        }, registry, appCap));
+        }, registry, packageInfo, appCap));
         const gitVersion = await (0, load_1.loadGitVersion)(config.pkg_info, version, client);
         transaction.moveCall({
             target: `${cache['@mvr/metadata']}::package_info::unset_git_versioning`,
@@ -62761,7 +62761,7 @@ const setPkgMetadata = (target, registry, appCap, tx_digest, provenance, params 
     };
 };
 exports.setPkgMetadata = setPkgMetadata;
-const unsetAllMetadata = async (network, name, target, registry, appCap) => {
+const unsetAllMetadata = async (network, name, target, registry, packageInfo, appCap) => {
     const url = `https://${network}.mvr.mystenlabs.com/v1/names/${name}`;
     const maxRetries = 5;
     const delayMs = 2000;
@@ -62795,7 +62795,7 @@ const unsetAllMetadata = async (network, name, target, registry, appCap) => {
         for (const key of pkgKeys) {
             transaction.moveCall({
                 target: `${target.pkg}::package_info::unset_metadata`,
-                arguments: [registry, appCap, transaction.pure.string(key)],
+                arguments: [packageInfo, transaction.pure.string(key)],
             });
         }
     };
