@@ -38,7 +38,7 @@
     "test": "jest",
     "ci-test": "jest",
     "coverage": "jest --coverage",
-    "build": "rimraf dist && npx ncc build src/deploy.ts -o dist/deploy && npx ncc build src/register.ts -o dist/register"
+    "build": "rimraf dist && npx ncc build src/deploy.ts -o dist/deploy && npx ncc build src/register.ts -o dist/register && npx ncc build src/extract.ts -o dist/extract && cp ./node_modules/@mysten/prettier-plugin-move/tree-sitter-move.wasm dist/extract"
   },
   "dependencies": {
     "@actions/core": "^1.11.1",
