@@ -42,8 +42,10 @@
   },
   "dependencies": {
     "@actions/core": "^1.11.1",
+    "@mysten/prettier-plugin-move": "^0.3.1",
     "@mysten/sui": "^1.29.1",
-    "@mysten/suins": "^0.7.15"
+    "@mysten/suins": "^0.7.15",
+    "web-tree-sitter": "^0.25.8"
   },
   "devDependencies": {
     "@jest/globals": "^29.7.0",
