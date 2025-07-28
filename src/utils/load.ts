@@ -2,7 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 
 import * as core from '@actions/core';
-import { SuiClient, SuiParsedData } from '@mysten/sui/client';
+import { SuiClient } from '@mysten/sui/client';
 import { toBase64 } from '@mysten/sui/utils';
 
 import { BytecodeDump, Deploy, MvrConfig } from '../types';
@@ -17,6 +17,17 @@ export const loadBytecodeDump = async (): Promise<BytecodeDump> => {
   const dumpPath = path.resolve('../bytecode.dump.json');
   const dumpRaw = await fs.readFile(dumpPath, 'utf-8');
   return JSON.parse(dumpRaw) as BytecodeDump;
+};
+
+export const loadParamsJson = async (): Promise<string | null> => {
+  try {
+    const paramsPath = path.resolve('../params.json');
+    const paramsRaw = await fs.readFile(paramsPath, 'utf-8');
+    return paramsRaw;
+  } catch (err) {
+    core.warning(`[loadParamsJson] Failed to load params.json: ${err}`);
+    return null;
+  }
 };
 
 export const loadDeploy = async (): Promise<Deploy> => {
