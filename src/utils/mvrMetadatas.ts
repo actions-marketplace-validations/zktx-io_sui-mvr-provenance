@@ -15,8 +15,8 @@ const splitBase64ByByteLength = (base64: string, maxBytes: number): string[] => 
   return chunks;
 };
 
-export const setAllMetadata = (
-  metadataTarget: string,
+export const setCoreMetadata = (
+  target: string,
   registry: {
     $kind: 'Input';
     Input: number;
@@ -30,10 +30,7 @@ export const setAllMetadata = (
         type?: 'object';
       },
   config: MvrConfig,
-  tx_digest: string,
-  provenance: string,
 ): ((tx: Transaction) => void) => {
-  const chunks = splitBase64ByByteLength(provenance, 16380);
   const keys: [string, string][] = [
     ['description', config.app_desc],
     ['homepage_url', config.homepage_url ?? (process.env.GIT_REPO || '')],
@@ -42,15 +39,48 @@ export const setAllMetadata = (
       config.documentation_url ?? (process.env.GIT_REPO ? `${process.env.GIT_REPO}#readme` : ''),
     ],
     ['icon_url', config.icon_url || ''],
-    ['contact', config.contact || ''],
-    ['tx_digest', tx_digest],
-    ...chunks.map((chunk, i): [string, string] => [`provenance_${i}`, chunk]),
   ];
 
   return (transaction: Transaction) => {
     for (const [key, value] of keys) {
       transaction.moveCall({
-        target: metadataTarget,
+        target: `${target}::move_registry::set_metadata`,
+        arguments: [registry, appCap, transaction.pure.string(key), transaction.pure.string(value)],
+      });
+    }
+  };
+};
+
+export const setPkgMetadata = (
+  target: string,
+  registry: {
+    $kind: 'Input';
+    Input: number;
+    type?: 'object';
+  },
+  appCap:
+    | TransactionResult
+    | {
+        $kind: 'Input';
+        Input: number;
+        type?: 'object';
+      },
+  tx_digest: string,
+  provenance: string,
+  params?: string,
+): ((tx: Transaction) => void) => {
+  const prov_chunks = splitBase64ByByteLength(provenance, 16380);
+  const params_chunks = params ? splitBase64ByByteLength(params, 16380) : [];
+  const keys: [string, string][] = [
+    ['prov_tx_', tx_digest],
+    ...prov_chunks.map((chunk, i): [string, string] => [`prov_jsonl_${i}`, chunk]),
+    ...params_chunks.map((chunk, i): [string, string] => [`prov_params_${i}`, chunk]),
+  ];
+
+  return (transaction: Transaction) => {
+    for (const [key, value] of keys) {
+      transaction.moveCall({
+        target: `${target}::package_info::set_metadata`,
         arguments: [registry, appCap, transaction.pure.string(key), transaction.pure.string(value)],
       });
     }
@@ -60,7 +90,10 @@ export const setAllMetadata = (
 export const unsetAllMetadata = async (
   network: Network,
   name: string,
-  metadataTarget: string,
+  target: {
+    pkg: string;
+    core: string;
+  },
   registry: {
     $kind: 'Input';
     Input: number;
@@ -95,12 +128,19 @@ export const unsetAllMetadata = async (
     }
   }
 
-  const keys = Object.keys(json?.metadata || {});
+  const coreKeys = Object.keys(json?.metadata || {});
+  const pkgKeys = Object.keys(json?.package_info || {});
 
   return (transaction: Transaction) => {
-    for (const key of keys) {
+    for (const key of coreKeys) {
       transaction.moveCall({
-        target: metadataTarget,
+        target: `${target.core}::move_registry::unset_metadata`,
+        arguments: [registry, appCap, transaction.pure.string(key)],
+      });
+    }
+    for (const key of pkgKeys) {
+      transaction.moveCall({
+        target: `${target.pkg}::package_info::unset_metadata`,
         arguments: [registry, appCap, transaction.pure.string(key)],
       });
     }
