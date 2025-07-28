@@ -71,9 +71,15 @@ const main = async () => {
 
     const files = (await fs.readdir(MOVE_DIR)).filter(f => f.endsWith('.move'));
 
+    if (files.length === 0) {
+      core.warning(`No .move files found in the directory: ${MOVE_DIR}`);
+      return;
+    } else {
+      core.info(`Found [${files.join(', ')}] files in the directory: ${MOVE_DIR}`);
+    }
+
     for (const file of files) {
-      const fullPath = path.join(MOVE_DIR, file);
-      const { moduleName, functions } = await extractFromFile(fullPath, parser);
+      const { moduleName, functions } = await extractFromFile(path.join(MOVE_DIR, file), parser);
       if (functions.length > 0) {
         result[moduleName] = functions;
       }
@@ -84,6 +90,7 @@ const main = async () => {
     } else {
       const outputPath = path.resolve('./params.json');
       await fs.writeFile(outputPath, JSON.stringify(result), 'utf-8');
+      core.info(JSON.stringify(result, null, 2));
     }
   }
 };
