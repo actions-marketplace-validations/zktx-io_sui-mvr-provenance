@@ -25739,9 +25739,6 @@ const main = async () => {
             core.warning(`No .move files found in the directory: ${MOVE_DIR}`);
             return;
         }
-        else {
-            core.info(`Found [${files.join(', ')}] files in the directory: ${MOVE_DIR}`);
-        }
         for (const file of files) {
             const { moduleName, functions } = await extractFromFile(path_1.default.join(MOVE_DIR, file), parser);
             if (functions.length > 0) {
@@ -25754,7 +25751,6 @@ const main = async () => {
         else {
             const outputPath = path_1.default.resolve('./params.json');
             await promises_1.default.writeFile(outputPath, JSON.stringify(result), 'utf-8');
-            core.info(JSON.stringify(result, null, 2));
         }
     }
 };

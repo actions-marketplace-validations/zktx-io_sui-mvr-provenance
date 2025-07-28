@@ -74,8 +74,6 @@ const main = async () => {
     if (files.length === 0) {
       core.warning(`No .move files found in the directory: ${MOVE_DIR}`);
       return;
-    } else {
-      core.info(`Found [${files.join(', ')}] files in the directory: ${MOVE_DIR}`);
     }
 
     for (const file of files) {
@@ -90,7 +88,6 @@ const main = async () => {
     } else {
       const outputPath = path.resolve('./params.json');
       await fs.writeFile(outputPath, JSON.stringify(result), 'utf-8');
-      core.info(JSON.stringify(result, null, 2));
     }
   }
 };
