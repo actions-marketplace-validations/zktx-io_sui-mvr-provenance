@@ -62784,7 +62784,7 @@ const unsetAllMetadata = async (network, name, target, registry, packageInfo, ap
         }
     }
     const coreKeys = Object.keys(json?.metadata || {});
-    const pkgKeys = Object.keys(json?.package_info || {});
+    const pkgKeys = Object.keys(json?.package_info.metadata || {});
     return (transaction) => {
         for (const key of coreKeys) {
             transaction.moveCall({
