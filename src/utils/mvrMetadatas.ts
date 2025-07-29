@@ -129,7 +129,7 @@ export const unsetAllMetadata = async (
   }
 
   const coreKeys = Object.keys(json?.metadata || {});
-  const pkgKeys = Object.keys(json?.package_info || {});
+  const pkgKeys = Object.keys(json?.package_info.metadata || {});
 
   return (transaction: Transaction) => {
     for (const key of coreKeys) {
