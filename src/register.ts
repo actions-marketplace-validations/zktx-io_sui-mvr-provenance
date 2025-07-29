@@ -123,7 +123,7 @@ const main = async () => {
     });
 
     transaction.add(
-      setPkgMetadata(cache['@mvr/metadata'], registry, appCap, deploy.digest, provenance, params),
+      setPkgMetadata(cache['@mvr/metadata'], packageInfo, deploy.digest, provenance, params),
     );
 
     transaction.moveCall({
@@ -226,7 +226,7 @@ const main = async () => {
     });
 
     transaction.add(
-      setPkgMetadata(cache['@mvr/metadata'], registry, appCap, deploy.digest, provenance, params),
+      setPkgMetadata(cache['@mvr/metadata'], packageInfo, deploy.digest, provenance, params),
     );
 
     const { input } = await client.dryRunTransactionBlock({

@@ -62081,7 +62081,7 @@ const main = async () => {
             target: `${cache['@mvr/metadata']}::package_info::set_git_versioning`,
             arguments: [packageInfo, transaction.pure.u64(version), git],
         });
-        transaction.add((0, mvrMetadatas_1.setPkgMetadata)(cache['@mvr/metadata'], registry, appCap, deploy.digest, provenance, params));
+        transaction.add((0, mvrMetadatas_1.setPkgMetadata)(cache['@mvr/metadata'], packageInfo, deploy.digest, provenance, params));
         transaction.moveCall({
             target: `${cache['@mvr/core']}::move_registry::assign_package`,
             arguments: [registry, appCap, packageInfo],
@@ -62152,7 +62152,7 @@ const main = async () => {
             target: `${cache['@mvr/metadata']}::package_info::set_git_versioning`,
             arguments: [packageInfo, transaction.pure.u64(version), git],
         });
-        transaction.add((0, mvrMetadatas_1.setPkgMetadata)(cache['@mvr/metadata'], registry, appCap, deploy.digest, provenance, params));
+        transaction.add((0, mvrMetadatas_1.setPkgMetadata)(cache['@mvr/metadata'], packageInfo, deploy.digest, provenance, params));
         const { input } = await client.dryRunTransactionBlock({
             transactionBlock: await transaction.build({ client }),
         });
@@ -62743,7 +62743,7 @@ const setCoreMetadata = (target, registry, appCap, config) => {
     };
 };
 exports.setCoreMetadata = setCoreMetadata;
-const setPkgMetadata = (target, registry, appCap, tx_digest, provenance, params = null) => {
+const setPkgMetadata = (target, packageInfo, tx_digest, provenance, params = null) => {
     const prov_chunks = splitBase64ByByteLength(provenance, 16380);
     const params_chunks = params ? splitBase64ByByteLength(params, 16380) : [];
     const keys = [
@@ -62755,7 +62755,7 @@ const setPkgMetadata = (target, registry, appCap, tx_digest, provenance, params 
         for (const [key, value] of keys) {
             transaction.moveCall({
                 target: `${target}::package_info::set_metadata`,
-                arguments: [registry, appCap, transaction.pure.string(key), transaction.pure.string(value)],
+                arguments: [packageInfo, transaction.pure.string(key), transaction.pure.string(value)],
             });
         }
     };

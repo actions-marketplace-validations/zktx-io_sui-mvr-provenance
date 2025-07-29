@@ -53,12 +53,7 @@ export const setCoreMetadata = (
 
 export const setPkgMetadata = (
   target: string,
-  registry: {
-    $kind: 'Input';
-    Input: number;
-    type?: 'object';
-  },
-  appCap:
+  packageInfo:
     | TransactionResult
     | {
         $kind: 'Input';
@@ -81,7 +76,7 @@ export const setPkgMetadata = (
     for (const [key, value] of keys) {
       transaction.moveCall({
         target: `${target}::package_info::set_metadata`,
-        arguments: [registry, appCap, transaction.pure.string(key), transaction.pure.string(value)],
+        arguments: [packageInfo, transaction.pure.string(key), transaction.pure.string(value)],
       });
     }
   };
