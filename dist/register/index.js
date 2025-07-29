@@ -62135,6 +62135,7 @@ const main = async () => {
             core: cache['@mvr/core'],
             pkg: cache['@mvr/metadata'],
         }, registry, packageInfo, appCap));
+        transaction.add((0, mvrMetadatas_1.setCoreMetadata)(cache['@mvr/core'], registry, appCap, config));
         const gitVersion = await (0, load_1.loadGitVersion)(config.pkg_info, version, client);
         transaction.moveCall({
             target: `${cache['@mvr/metadata']}::package_info::unset_git_versioning`,
@@ -62747,7 +62748,7 @@ const setPkgMetadata = (target, packageInfo, tx_digest, provenance, params = nul
     const prov_chunks = splitBase64ByByteLength(provenance, 16380);
     const params_chunks = params ? splitBase64ByByteLength(params, 16380) : [];
     const keys = [
-        ['prov_tx_', tx_digest],
+        ['prov_tx', tx_digest],
         ...prov_chunks.map((chunk, i) => [`prov_jsonl_${i}`, chunk]),
         ...params_chunks.map((chunk, i) => [`prov_params_${i}`, chunk]),
     ];
