@@ -15,13 +15,16 @@ import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { Transaction } from '@mysten/sui/transactions';
 import { fromBase64, toBase64 } from '@mysten/sui/utils';
 import { verifyPersonalMessageSignature, verifyTransactionSignature } from '@mysten/sui/verify';
-import { Network } from './type';
+
+import { Network } from '../types';
 
 export const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 const NETWORK = 'devnet';
 const SALT_LENGTH = 16;
 const IV_LENGTH = 12;
+const RETRY_MAX = 31;
+const RETRY_DELAY = 5000;
 
 interface Payload {
   intent: IntentScope;
@@ -118,6 +121,37 @@ export class GitSigner extends Keypair {
     const ephemeralKeypair = Ed25519Keypair.generate();
     const ephemeralAddress = ephemeralKeypair.getPublicKey().toSuiAddress();
     const host = getFaucetHost(NETWORK);
+
+    const maxFaucetRetries = 5;
+    const retryDelay = 2000;
+
+    let faucetSuccess = false;
+    for (let attempt = 1; attempt <= maxFaucetRetries; attempt++) {
+      try {
+        const res = await requestSuiFromFaucetV2({
+          host,
+          recipient: ephemeralAddress,
+        });
+
+        if (res.status === 'Success') {
+          faucetSuccess = true;
+          break;
+        } else {
+          console.warn(`⚠️ Faucet failed (attempt ${attempt}): ${res.status}`);
+        }
+      } catch (e) {
+        console.warn(`⚠️ Faucet error (attempt ${attempt}): ${e}`);
+      }
+
+      if (attempt < maxFaucetRetries) {
+        await sleep(retryDelay);
+      }
+    }
+
+    if (!faucetSuccess) {
+      throw new Error(`❌ Failed to get SUI from faucet after ${maxFaucetRetries} attempts.`);
+    }
+
     const res = await requestSuiFromFaucetV2({
       host,
       recipient: ephemeralAddress,
@@ -128,7 +162,6 @@ export class GitSigner extends Keypair {
     const client = new SuiClient({ url: getFullnodeUrl(NETWORK) });
 
     const maxRetries = 5;
-    const retryDelay = 1500;
     let coinPage;
 
     for (let i = 0; i < maxRetries; i++) {
@@ -208,17 +241,28 @@ export class GitSigner extends Keypair {
     }
   }
 
+  static #splitUint8Array(input: Uint8Array, chunkSize = 16380): Uint8Array[] {
+    const chunks: Uint8Array[] = [];
+    for (let i = 0; i < input.length; i += chunkSize) {
+      chunks.push(input.slice(i, i + chunkSize));
+    }
+    return chunks;
+  }
+
   async #sendRequest(payload: Payload, isEnd?: boolean): Promise<SignatureWithBytes> {
     const encrypted = await encryptBytes(
       new TextEncoder().encode(JSON.stringify(payload)),
       this.#pin,
     );
+    const chunks = GitSigner.#splitUint8Array(fromBase64(encrypted));
     const ephemeralAddress = this.#ephemeralKeypair.getPublicKey().toSuiAddress();
     const tx = new Transaction();
     tx.setSender(ephemeralAddress);
     tx.setGasBudget(10000000);
     tx.pure.bool(true);
-    tx.pure.vector('u8', fromBase64(encrypted));
+    chunks.forEach(chunk => {
+      tx.pure.vector('u8', chunk);
+    });
     tx.transferObjects([tx.gas], ephemeralAddress);
     const { digest: request } = await this.#client.signAndExecuteTransaction({
       transaction: tx,
@@ -233,8 +277,8 @@ export class GitSigner extends Keypair {
       };
     }
 
-    let retry = 20;
-    const sleepTime = 5000;
+    let retry = RETRY_MAX;
+    const sleepTime = RETRY_DELAY;
     while (retry-- > 0) {
       core.info(`⏳ Waiting for response... (${retry} retries left)`);
       const { data } = await this.#client.queryTransactionBlocks({

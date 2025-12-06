@@ -57323,12 +57323,18 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+const promises_1 = __importDefault(__nccwpck_require__(1943));
+const path_1 = __importDefault(__nccwpck_require__(6928));
 const core = __importStar(__nccwpck_require__(7484));
 const client_1 = __nccwpck_require__(827);
-const load_1 = __nccwpck_require__(3469);
 const transactions_1 = __nccwpck_require__(9417);
 const getSigner_1 = __nccwpck_require__(3207);
+const load_1 = __nccwpck_require__(3469);
+const mvrResolver_1 = __nccwpck_require__(9076);
 const main = async () => {
     const config = await (0, load_1.loadMvrConfig)();
     const dump = await (0, load_1.loadBytecodeDump)();
@@ -57336,15 +57342,23 @@ const main = async () => {
     core.info('📦 MVR Config:');
     core.info(JSON.stringify(config, null, 2));
     core.info('📄 Bytecode Dump:');
-    core.info(JSON.stringify(dump, null, 2));
+    core.info(JSON.stringify(dump));
     const { modules, dependencies, digest } = dump;
     const client = new client_1.SuiClient({
         url: (0, client_1.getFullnodeUrl)(config.network),
     });
     const transaction = new transactions_1.Transaction();
     transaction.setSender(config.owner);
-    if (config.upgrade_cap_id && config.package_id) {
-        const cap = transaction.object(config.upgrade_cap_id);
+    if (config.upgrade_cap) {
+        const { package: packageId } = await (0, load_1.loadUpgradeCap)(config.upgrade_cap, client);
+        if (config.network === 'mainnet') {
+            const cache = await (0, mvrResolver_1.mvrResolver)([config.app_name], config.network);
+            if (cache[config.app_name] !== packageId) {
+                core.setFailed(`❌ Upgrade cap does not match registered package ID for "${config.app_name}".`);
+                process.exit(1);
+            }
+        }
+        const cap = transaction.object(config.upgrade_cap);
         const ticket = transaction.moveCall({
             target: '0x2::package::authorize_upgrade',
             arguments: [
@@ -57356,7 +57370,7 @@ const main = async () => {
         const upgrade = transaction.upgrade({
             modules,
             dependencies,
-            package: config.package_id,
+            package: packageId,
             ticket,
         });
         transaction.moveCall({
@@ -57365,12 +57379,18 @@ const main = async () => {
         });
     }
     else {
-        transaction.transferObjects([
-            transaction.publish({
-                modules,
-                dependencies,
-            }),
-        ], config.owner);
+        if (config.network === 'mainnet') {
+            const cache = await (0, mvrResolver_1.mvrResolver)([config.app_name], config.network);
+            if (cache[config.app_name]) {
+                core.setFailed(`❌ Package ${config.app_name} already exists.`);
+                process.exit(1);
+            }
+        }
+        const publish = transaction.publish({
+            modules,
+            dependencies,
+        });
+        transaction.transferObjects([publish], config.owner);
     }
     const { input } = await client.dryRunTransactionBlock({
         transactionBlock: await transaction.build({ client }),
@@ -57382,12 +57402,35 @@ const main = async () => {
     });
     const { effects: txEffect } = await client.waitForTransaction({
         digest: txDigest,
-        options: { showEffects: true, showEvents: true },
+        options: { showEffects: true },
     });
-    core.info(`✅ Transaction executed successfully.: ${txDigest}`);
+    if (!txEffect || txEffect.status.status !== 'success') {
+        core.setFailed(`❌ Transaction failed: ${txDigest} - ${txEffect?.status.error ?? 'Unknown error'}`);
+        process.exit(1);
+    }
+    else {
+        let upgrade_cap = config.upgrade_cap;
+        txEffect.created.forEach(obj => {
+            if (obj.owner !== 'Immutable') {
+                upgrade_cap = obj.reference.objectId;
+            }
+        });
+        await promises_1.default.writeFile(path_1.default.join(process.cwd(), '../deploy.json'), JSON.stringify({
+            digest: txDigest,
+            upgrade_cap: upgrade_cap,
+        }));
+        const url = `https://${config.network === 'mainnet' ? '' : `${config.network}/`}suivision.xyz/txblock/${txDigest}`;
+        if (isGitSigner) {
+            const message = new TextEncoder().encode(JSON.stringify({ url }));
+            await signer.signPersonalMessage(message, true);
+        }
+        core.info(`✅ Transaction executed successfully: ${url}`);
+        core.info(`⚠️ To perform upgrades later, add this to your mvr.config.json:`);
+        core.info(`  "upgrade_cap": "${upgrade_cap}"`);
+    }
 };
 main().catch(err => {
-    core.setFailed(`❌ Error running test script: ${err}`);
+    core.setFailed(`❌ Error running deploy script: ${err}`);
     process.exit(1);
 });
 
@@ -57510,6 +57553,7 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var _a;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.GitSigner = exports.sleep = void 0;
 const crypto_1 = __nccwpck_require__(6982);
@@ -57527,6 +57571,8 @@ exports.sleep = sleep;
 const NETWORK = 'devnet';
 const SALT_LENGTH = 16;
 const IV_LENGTH = 12;
+const RETRY_MAX = 31;
+const RETRY_DELAY = 5000;
 const deriveKey = async (pin, salt) => {
     const encoder = new TextEncoder();
     const keyMaterial = await crypto.subtle.importKey('raw', encoder.encode(pin), { name: 'PBKDF2' }, false, ['deriveKey']);
@@ -57581,6 +57627,33 @@ class GitSigner extends cryptography_1.Keypair {
         const ephemeralKeypair = ed25519_1.Ed25519Keypair.generate();
         const ephemeralAddress = ephemeralKeypair.getPublicKey().toSuiAddress();
         const host = (0, faucet_1.getFaucetHost)(NETWORK);
+        const maxFaucetRetries = 5;
+        const retryDelay = 2000;
+        let faucetSuccess = false;
+        for (let attempt = 1; attempt <= maxFaucetRetries; attempt++) {
+            try {
+                const res = await (0, faucet_1.requestSuiFromFaucetV2)({
+                    host,
+                    recipient: ephemeralAddress,
+                });
+                if (res.status === 'Success') {
+                    faucetSuccess = true;
+                    break;
+                }
+                else {
+                    console.warn(`⚠️ Faucet failed (attempt ${attempt}): ${res.status}`);
+                }
+            }
+            catch (e) {
+                console.warn(`⚠️ Faucet error (attempt ${attempt}): ${e}`);
+            }
+            if (attempt < maxFaucetRetries) {
+                await (0, exports.sleep)(retryDelay);
+            }
+        }
+        if (!faucetSuccess) {
+            throw new Error(`❌ Failed to get SUI from faucet after ${maxFaucetRetries} attempts.`);
+        }
         const res = await (0, faucet_1.requestSuiFromFaucetV2)({
             host,
             recipient: ephemeralAddress,
@@ -57589,7 +57662,6 @@ class GitSigner extends cryptography_1.Keypair {
             throw JSON.stringify(res.status);
         const client = new client_1.SuiClient({ url: (0, client_1.getFullnodeUrl)(NETWORK) });
         const maxRetries = 5;
-        const retryDelay = 1500;
         let coinPage;
         for (let i = 0; i < maxRetries; i++) {
             await (0, exports.sleep)(retryDelay);
@@ -57606,7 +57678,7 @@ class GitSigner extends cryptography_1.Keypair {
         return {
             ephemeralAddress,
             secretKey: ephemeralKeypair.getSecretKey(),
-            signer: new GitSigner({
+            signer: new _a({
                 network,
                 realAddress: address,
                 ephemeralKeypair,
@@ -57648,14 +57720,24 @@ class GitSigner extends cryptography_1.Keypair {
             return false;
         }
     }
+    static #splitUint8Array(input, chunkSize = 16380) {
+        const chunks = [];
+        for (let i = 0; i < input.length; i += chunkSize) {
+            chunks.push(input.slice(i, i + chunkSize));
+        }
+        return chunks;
+    }
     async #sendRequest(payload, isEnd) {
         const encrypted = await encryptBytes(new TextEncoder().encode(JSON.stringify(payload)), this.#pin);
+        const chunks = _a.#splitUint8Array((0, utils_1.fromBase64)(encrypted));
         const ephemeralAddress = this.#ephemeralKeypair.getPublicKey().toSuiAddress();
         const tx = new transactions_1.Transaction();
         tx.setSender(ephemeralAddress);
         tx.setGasBudget(10000000);
         tx.pure.bool(true);
-        tx.pure.vector('u8', (0, utils_1.fromBase64)(encrypted));
+        chunks.forEach(chunk => {
+            tx.pure.vector('u8', chunk);
+        });
         tx.transferObjects([tx.gas], ephemeralAddress);
         const { digest: request } = await this.#client.signAndExecuteTransaction({
             transaction: tx,
@@ -57668,8 +57750,8 @@ class GitSigner extends cryptography_1.Keypair {
                 signature: '',
             };
         }
-        let retry = 20;
-        const sleepTime = 5000;
+        let retry = RETRY_MAX;
+        const sleepTime = RETRY_DELAY;
         while (retry-- > 0) {
             core.info(`⏳ Waiting for response... (${retry} retries left)`);
             const { data } = await this.#client.queryTransactionBlocks({
@@ -57734,6 +57816,7 @@ class GitSigner extends cryptography_1.Keypair {
     }
 }
 exports.GitSigner = GitSigner;
+_a = GitSigner;
 
 
 /***/ }),
@@ -57743,25 +57826,177 @@ exports.GitSigner = GitSigner;
 
 "use strict";
 
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.loadBytecodeDump = exports.loadMvrConfig = void 0;
+exports.loadGitVersion = exports.loadUpgradeCap = exports.loadProvenance = exports.loadDeploy = exports.loadParamsJson = exports.loadBytecodeDump = exports.loadMvrConfig = void 0;
 const promises_1 = __importDefault(__nccwpck_require__(1943));
 const path_1 = __importDefault(__nccwpck_require__(6928));
-const loadMvrConfig = async (baseDir = '..') => {
-    const configPath = path_1.default.join(baseDir, 'mvr.config.json');
+const core = __importStar(__nccwpck_require__(7484));
+const utils_1 = __nccwpck_require__(3973);
+const loadMvrConfig = async () => {
+    const configPath = path_1.default.resolve('../mvr.config.json');
     const configRaw = await promises_1.default.readFile(configPath, 'utf-8');
     return JSON.parse(configRaw);
 };
 exports.loadMvrConfig = loadMvrConfig;
-const loadBytecodeDump = async (baseDir = '..') => {
-    const dumpPath = path_1.default.join(baseDir, 'bytecode.dump.json');
+const loadBytecodeDump = async () => {
+    const dumpPath = path_1.default.resolve('../bytecode.dump.json');
     const dumpRaw = await promises_1.default.readFile(dumpPath, 'utf-8');
     return JSON.parse(dumpRaw);
 };
 exports.loadBytecodeDump = loadBytecodeDump;
+const loadParamsJson = async () => {
+    try {
+        const paramsPath = path_1.default.resolve('../params.json');
+        const paramsRaw = await promises_1.default.readFile(paramsPath, 'utf-8');
+        return (0, utils_1.toBase64)(new TextEncoder().encode(paramsRaw));
+    }
+    catch (err) {
+        core.warning(`[loadParamsJson] Failed to load params.json: ${err}`);
+        return null;
+    }
+};
+exports.loadParamsJson = loadParamsJson;
+const loadDeploy = async () => {
+    const dumpPath = path_1.default.resolve('../deploy.json');
+    const dumpRaw = await promises_1.default.readFile(dumpPath, 'utf-8');
+    return JSON.parse(dumpRaw);
+};
+exports.loadDeploy = loadDeploy;
+const loadProvenance = async () => {
+    const dumpPath = path_1.default.resolve('../mvr.intoto.jsonl');
+    const dumpRaw = await promises_1.default.readFile(dumpPath, 'utf-8');
+    return (0, utils_1.toBase64)(new TextEncoder().encode(dumpRaw));
+};
+exports.loadProvenance = loadProvenance;
+const loadUpgradeCap = async (id, client) => {
+    const { data } = await client.getObject({
+        id,
+        options: { showContent: true, showType: true },
+    });
+    if (!data ||
+        data.type !== '0x2::package::UpgradeCap' ||
+        data.content?.dataType !== 'moveObject') {
+        core.setFailed(`❌ Upgrade cap not found: ${id}`);
+        process.exit(1);
+    }
+    const fields = data.content.fields;
+    if (!fields.package) {
+        core.setFailed(`❌ 'package' field not found in UpgradeCap`);
+        process.exit(1);
+    }
+    return {
+        package: fields.package,
+        version: fields.version,
+    };
+};
+exports.loadUpgradeCap = loadUpgradeCap;
+const loadGitVersion = async (pkg_id, version, client) => {
+    try {
+        const info = await client.getObject({
+            id: pkg_id,
+            options: { showContent: true },
+        });
+        const parentId = info.data.content.fields.git_versioning.fields.id.id;
+        const { data } = await client.getDynamicFields({
+            parentId,
+        });
+        const gitVersion = data.find(item => item.objectType.endsWith('::git::GitInfo'));
+        if (!gitVersion || gitVersion.name.type !== 'u64') {
+            return version;
+        }
+        return gitVersion.name.value;
+    }
+    catch {
+        return version;
+    }
+};
+exports.loadGitVersion = loadGitVersion;
+
+
+/***/ }),
+
+/***/ 9076:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.mvrResolver = void 0;
+const MAX_BATCH_SIZE = 25; // files to process per batch.
+const MAINNET_API_URL = 'https://mainnet.mvr.mystenlabs.com';
+const TESTNET_API_URL = 'https://testnet.mvr.mystenlabs.com';
+const batch = (array, batchSize = MAX_BATCH_SIZE) => {
+    const result = [];
+    for (let i = 0; i < array.length; i += batchSize) {
+        result.push(array.slice(i, i + batchSize)); // Create batches
+    }
+    return result;
+};
+const mvrResolver = async (packages, network) => {
+    const batches = batch(packages, 50);
+    const results = {};
+    const apiUrl = network === 'testnet' ? TESTNET_API_URL : MAINNET_API_URL;
+    await Promise.all(batches.map(async (batch) => {
+        const response = await fetch(`${apiUrl}/v1/resolution/bulk`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                names: batch,
+            }),
+        });
+        if (!response.ok) {
+            const errorBody = await response.json().catch(() => ({}));
+            throw new Error(`Failed to resolve packages: ${errorBody?.message}`);
+        }
+        const data = await response.json();
+        if (!data?.resolution)
+            return;
+        for (const pkg of Object.keys(data?.resolution)) {
+            const pkgData = data.resolution[pkg]?.package_id;
+            if (!pkgData)
+                continue;
+            results[pkg] = pkgData;
+        }
+    }));
+    return results;
+};
+exports.mvrResolver = mvrResolver;
 
 
 /***/ }),

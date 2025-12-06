@@ -23,23 +23,60 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: zktx-io/sui-mvr-provenance@v0.0.8
+      - uses: zktx-io/sui-mvr-provenance@v0.3.8
         with:
           working-directory: ${{ inputs.working-directory }}
 
-  deploy:
+  extract:
     runs-on: ubuntu-latest
     needs: build
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@v4
+        with:
+          path: move-src
+
+      - name: Checkout provenance tool
+        uses: actions/checkout@v4
+        with:
+          repository: zktx-io/sui-mvr-provenance
+          ref: v0.3.8
+          path: provenance
+
+      - name: Install dependencies
+        working-directory: provenance
+        run: npm ci
+
+      - name: Extract Move function params
+        working-directory: provenance
+        env:
+          MOVE_DIR: ${{ github.workspace }}/move-src/${{ inputs.working-directory }}
+        run: node dist/extract/index.js
+
+      - name: Upload extracted params.json
+        uses: actions/upload-artifact@v4
+        with:
+          name: params.json
+          path: provenance/params.json
+
+  deploy-sign:
+    runs-on: ubuntu-latest
+    needs: build
+    outputs:
+      base64_provenance: ${{ steps.encode.outputs.base64_file }}
+      base64_hashes: ${{ steps.encode.outputs.base64_hashes }}
     steps:
       - name: Download Bytecode Dump
         uses: actions/download-artifact@v4
         with:
           name: bytecode.dump.json
+          path: .
 
       - name: Download mvr.config.json
         uses: actions/download-artifact@v4
         with:
           name: mvr.config.json
+          path: .
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -50,14 +87,160 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: zktx-io/sui-mvr-provenance
-          ref: v0.0.8
+          ref: v0.3.8
           path: temp
 
-      - name: Run deploy.js from zktx-io/sui-mvr-provenance
-        working-directory: temp
+      - name: Deploy to Sui
+        working-directory: ./temp
         env:
           GIT_SIGNER_PIN: ${{ secrets.GIT_SIGNER_PIN }}
           ED25519_PRIVATE_KEY: ${{ secrets.ED25519_PRIVATE_KEY }}
         run: |
           npm ci
           node dist/deploy
+
+      - name: Upload deploy.json
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy.json
+          path: deploy.json
+          if-no-files-found: error
+
+      - id: encode
+        run: |
+          HASHES=""
+          for FILE in bytecode.dump.json; do
+            if [ ! -f "$FILE" ]; then
+              echo "::error::❌ $FILE not found"
+              exit 1
+            fi
+            FILE_HASH=$(sha256sum "$FILE" | cut -d ' ' -f 1)
+            HASHES+="${FILE_HASH}  ${FILE}"$'\n'
+          done
+
+          echo "base64_hashes=$(echo -n "$HASHES" | base64 -w0)" >> "$GITHUB_OUTPUT"
+
+  provenance:
+    needs: deploy-sign
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: ${{ needs.deploy-sign.outputs.base64_hashes }}
+      upload-assets: false
+      provenance-name: 'mvr.intoto.jsonl'
+
+  verify:
+    needs: [deploy-sign, provenance]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download provenance file
+        uses: actions/download-artifact@v4
+        with:
+          name: mvr.intoto.jsonl
+          path: .
+
+      - name: Download bytecode.dump.json artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: bytecode.dump.json
+          path: .
+
+      - name: Install slsa-verifier
+        run: |
+          curl -sSfL https://github.com/slsa-framework/slsa-verifier/releases/latest/download/slsa-verifier-linux-amd64 -o slsa-verifier
+          chmod +x slsa-verifier
+          sudo mv slsa-verifier /usr/local/bin/
+
+      - name: Verify all provenance files
+        run: |
+          for FILE in bytecode.dump.json; do
+            echo "🔍 Verifying $FILE..."
+            slsa-verifier verify-artifact "$FILE" \
+              --provenance-path mvr.intoto.jsonl \
+              --source-uri "github.com/${{ github.repository }}" \
+              || {
+                echo "::error::❌ Verification failed for $FILE"
+                exit 1
+              }
+          done
+
+  mvr-sign:
+    needs: [deploy-sign, provenance, verify, extract]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download mvr.meta.config artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: mvr.config.json
+          path: .
+
+      - name: Check for valid app_name and app_desc in mvr.config.json
+        id: check_config
+        run: |
+          PACKAGE_NAME=$(jq -r '.app_name // empty' mvr.config.json)
+          PACKAGE_DESC=$(jq -r '.app_desc // empty' mvr.config.json)
+
+          if [[ -z "$PACKAGE_NAME" || -z "$PACKAGE_DESC" || ! "$PACKAGE_NAME" =~ ^@[^/]+\/[^/]+$ ]]; then
+            echo "skip_mvr=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip_mvr=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skipping MVR registration
+        if: steps.check_config.outputs.skip_mvr == 'true'
+        run: echo "⚠️ Skipping MVR registration due to missing or invalid config fields."
+
+      - name: Download provenance file
+        if: steps.check_config.outputs.skip_mvr == 'false'
+        uses: actions/download-artifact@v4
+        with:
+          name: mvr.intoto.jsonl
+          path: .
+
+      - name: Download deploy.json artifacts
+        if: steps.check_config.outputs.skip_mvr == 'false'
+        uses: actions/download-artifact@v4
+        with:
+          name: deploy.json
+          path: .
+
+      - name: Try downloading param names (optional)
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: params.json
+          path: .
+
+      - name: Set up Node.js
+        if: steps.check_config.outputs.skip_mvr == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Checkout
+        if: steps.check_config.outputs.skip_mvr == 'false'
+        uses: actions/checkout@v4
+        with:
+          repository: zktx-io/sui-mvr-provenance
+          ref: v0.3.8
+          path: temp
+
+      - name: Set Git metadata as environment variables
+        if: steps.check_config.outputs.skip_mvr == 'false'
+        id: set_git_metadata
+        run: |
+          echo "GIT_REPO=https://github.com/${{ github.repository }}" >> "$GITHUB_ENV"
+          echo "GIT_SUBDIR=${{ inputs.working-directory }}" >> "$GITHUB_ENV"
+          echo "GIT_COMMIT=${{ github.sha }}" >> "$GITHUB_ENV"
+
+      - name: Register to MVR
+        if: steps.check_config.outputs.skip_mvr == 'false'
+        working-directory: ./temp
+        env:
+          GIT_SIGNER_PIN: ${{ secrets.GIT_SIGNER_PIN }}
+          ED25519_PRIVATE_KEY: ${{ secrets.ED25519_PRIVATE_KEY }}
+          GIT_REPO: ${{ env.GIT_REPO }}
+          GIT_SUBDIR: ${{ env.GIT_SUBDIR }}
+          GIT_COMMIT: ${{ env.GIT_COMMIT }}
+        run: |
+          npm ci
+          node dist/register
