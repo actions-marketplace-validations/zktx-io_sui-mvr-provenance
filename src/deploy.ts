@@ -87,12 +87,17 @@ const main = async () => {
     transaction,
   });
 
-  const { effects: txEffect } = await client.waitForTransaction({
+  const { effects: txEffect, objectChanges: txObjectChanges } = await client.waitForTransaction({
     digest: txDigest,
-    options: { showEffects: true },
+    options: { showEffects: true, showObjectChanges: true },
   });
 
-  if (!txEffect || txEffect.status.status !== 'success') {
+  if (
+    !txEffect ||
+    txEffect.status.status !== 'success' ||
+    !txObjectChanges ||
+    txObjectChanges.length === 0
+  ) {
     core.setFailed(
       `❌ Transaction failed: ${txDigest} - ${txEffect?.status.error ?? 'Unknown error'}`,
     );
@@ -100,11 +105,13 @@ const main = async () => {
   } else {
     let upgrade_cap = config.upgrade_cap;
 
-    txEffect.created!.forEach(obj => {
-      if (obj.owner !== 'Immutable') {
-        upgrade_cap = obj.reference.objectId;
-      }
-    });
+    const upgradeCapChange = txObjectChanges.find(
+      obj => obj.type === 'created' && obj.objectType === '0x2::package::UpgradeCap',
+    );
+
+    if (upgradeCapChange && upgradeCapChange.type === 'created') {
+      upgrade_cap = upgradeCapChange.objectId;
+    }
 
     await fs.writeFile(
       path.join(process.cwd(), '../deploy.json'),

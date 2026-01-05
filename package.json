@@ -1,6 +1,6 @@
 {
   "name": "sui-mvr-provenance",
-  "version": "0.0.1",
+  "version": "0.3.9",
   "description": "Deploy Sui Packages with cryptographic provenance using SLSA + Sigstore.",
   "keywords": [
     "sui",
