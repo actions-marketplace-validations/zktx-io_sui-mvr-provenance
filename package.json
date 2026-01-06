@@ -44,8 +44,8 @@
   "dependencies": {
     "@actions/core": "^1.11.1",
     "@mysten/prettier-plugin-move": "^0.3.1",
-    "@mysten/sui": "^1.29.1",
-    "@mysten/suins": "^0.7.15",
+    "@mysten/sui": "^1.45.2",
+    "@mysten/suins": "^0.9.13",
     "web-tree-sitter": "^0.25.8"
   },
   "devDependencies": {
@@ -55,7 +55,7 @@
     "@typescript-eslint/eslint-plugin": "^8.29.1",
     "@typescript-eslint/parser": "^8.29.1",
     "@vercel/ncc": "^0.38.3",
-    "eslint": "^9.24.0",
+    "eslint": "^9.39.2",
     "eslint-plugin-github": "^6.0.0",
     "eslint-plugin-import": "^2.31.0",
     "eslint-plugin-jest": "^28.11.0",
